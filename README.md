@@ -3,9 +3,9 @@
 Este repositorio contiene los productos de la tesis de maestría en geofísica de Nicolas Cordoba acerca de la estimación de la porosidad de yacimiento de hidrocarburos con aprendizaje automático usando sísmica post-stack. El contenido de este repositorio se encuentra en constante cambio hasta la finalización de la tesis.
 
 ## Tabla de Contenido
-- [Instalación](#installation)
-- [Uso](#usage)
-- [Contact Information](#contact-information)
+- [Instalación](#instalación)
+- [Uso](#uso)
+- [Contact Information](#información-de-contacto)
 
 ## Instalación
 
