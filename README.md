@@ -5,7 +5,7 @@ Este repositorio contiene los productos de la tesis de maestría en geofísica d
 ## Tabla de Contenido
 - [Instalación](#instalación)
 - [Uso](#uso)
-- [Contact Information](#información-de-contacto)
+- [Información de Contacto](#información-de-contacto)
 
 ## Instalación
 
