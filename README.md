@@ -7,7 +7,7 @@ Este repositorio contiene los productos de la tesis de maestría en geofísica d
 - [Uso](#usage)
 - [Contact Information](#contact-information)
 
-## Installation
+## Instalación
 
 Para instalar las librerías usa `pip install -r requirements.txt`
 
