@@ -1,0 +1,6 @@
+*.segy
+*.npy
+*.h5
+*.keras
+.tesisenv/
+*.zip
