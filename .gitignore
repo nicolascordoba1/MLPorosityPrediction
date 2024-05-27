@@ -1,6 +1,10 @@
+.tesisenv/
+data_decatur/
+data_poseidon/
+data_poseidon_small/
+data_synthetic_own/
 *.segy
 *.npy
 *.h5
 *.keras
-.tesisenv/
 *.zip
