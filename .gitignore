@@ -8,3 +8,8 @@ data_synthetic_own/
 *.h5
 *.keras
 *.zip
+*.png
+*.pdf
+*.svg
+*.jpg
+*.csv
