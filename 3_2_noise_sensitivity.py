@@ -1,3 +1,4 @@
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
@@ -6,10 +7,10 @@ from sklearn.metrics import r2_score
 from utils_experiments import scale_to_range, unscale_from_range
 
 depth_start = 4700
-depth_end = 6380
+depth_end = 6400
 depth_step = 20
 depth_values = np.arange(depth_start, depth_end , depth_step)
-num_ticks = 6
+num_ticks = 6  # Adjust the number of ticks as needed
 depth_indices = np.linspace(0, len(depth_values) - 1, num_ticks, dtype=int)
 
 # Function to calculate SNR
@@ -27,15 +28,13 @@ results = {"Noise Level": [], "SNR": [], "SSIM": [], "R2": [], "Absolute Differe
 
 
 # Load data
-seis_full = np.load('data/data_decatur/processed/seismic_full.npy')
-phi_full = np.load('data/data_decatur/processed/porosity_full.npy')
+seis_full = np.load('data/data_decatur/processed/seismic_exploration_block.npy')
+phi_full = np.load('data/data_decatur/processed/porosity_exploration_block.npy')
 phi_full[phi_full < 0] = 0
 
 # Test inline
-inline_index = 50
-seismic_test = seis_full[inline_index]
-porosity_test = phi_full[inline_index]
-max_amplitud = abs(seismic_test).max()
+
+max_amplitud = abs(seis_full).max()
 noise_levels = noise_prcentage * max_amplitud
 # Model setup
 def simplified_cnn(input_shape):
@@ -80,68 +79,66 @@ def simplified_cnn(input_shape):
     model = tf.keras.Model(inputs, outputs)
     return model
 
-# Define input shape
+# Definir las dimensiones de entrada
 input_shape = (86, 1, 1)
 model = simplified_cnn(input_shape)
 print(model.summary())
-model.load_weights('models/fold_3_training_paul.weights.h5')
+model.load_weights('models/training_NFE.weights.h5')
 
 for idx, noise_level in enumerate(noise_levels):
+    results["Noise Level"].append(noise_prcentage[idx]*100)
     # Generate noise and apply it
-    noise = np.random.normal(loc=0, scale=noise_level, size=seismic_test.shape)
-    noisy_seismic = seismic_test + noise
+    noise = np.random.normal(loc=0, scale=noise_level, size=seis_full.shape)
+    noisy_seismic = seis_full + noise
 
     # Preprocess inputs
     X_noisy = noisy_seismic.reshape(-1, 86, 1, 1)
     X_noisy_norm = scale_to_range(X_noisy)
-    X = seismic_test.reshape(-1, 86, 1, 1)
-    X_norm = scale_to_range(X)
 
     # Predictions
     y_pred_noisy = model.predict(X_noisy_norm)
-    y_pred = model.predict(X_norm)
 
     # Rescale outputs
     y_pred_unscaled_noisy = unscale_from_range(
-        y_pred_noisy, original_min=porosity_test.min(), original_max=porosity_test.max()
-    ).reshape(1211, 86)
-    y_pred_unscaled = unscale_from_range(
-        y_pred, original_min=porosity_test.min(), original_max=porosity_test.max()
-    ).reshape(1211, 86)
-
+        y_pred_noisy, original_min=phi_full.min(), original_max=phi_full.max()
+    ).reshape(143, 370, 86)
+    
     # Calculate metrics
-    snr_value = calculate_snr(porosity_test, y_pred_unscaled_noisy)
-    ssim_value = ssim(porosity_test, y_pred_unscaled_noisy, data_range=0.3)
-    r2_value = r2_score(porosity_test.flatten(), y_pred_unscaled_noisy.flatten())
+    snr_value = calculate_snr(phi_full, y_pred_unscaled_noisy)
+    ssim_value = ssim(phi_full, y_pred_unscaled_noisy, data_range=0.3)
+    r2_value = r2_score(phi_full.flatten(), y_pred_unscaled_noisy.flatten())
 
     # Append results
-    results["Noise Level"].append(noise_prcentage[idx]*10)
     results["SNR"].append(snr_value)
     results["SSIM"].append(ssim_value)
     results["R2"].append(r2_value)
     
-    phi_difference_noisy = y_pred_unscaled_noisy - porosity_test
+    phi_difference_noisy = y_pred_unscaled_noisy - phi_full
     # Calculate absolute difference and mean
     absolute_difference = np.abs(phi_difference_noisy)
     max_absolute_difference = np.max(absolute_difference)
 
     # Store in results
     results["Absolute Difference"].append(max_absolute_difference)
-
+    #Plot
+    
+    phi_difference_noisy = y_pred_unscaled_noisy - phi_full
+    
+    inline = 83-40
     fig, ax = plt.subplots(1, 4, figsize=(25, 5))
 
-    fig.suptitle('Noise Addition Test with Noise Level: ' + str(noise_level), fontsize=40) 
+    fig.suptitle('Noise Addition Test with Noise Level: ' + str(noise_level), fontsize=40)  # Adjust figure title size
 
-    im1 = ax[0].imshow(noisy_seismic.T, cmap='seismic')
-    ax[0].set_title('Seismic', fontsize=30)  
+    im1 = ax[0].imshow(noisy_seismic[inline,:,:].T, cmap='seismic')
+    ax[0].set_title('Seismic', fontsize=30)  # Adjust title size
     ax[0].set_aspect('auto')
     ax[0].set_yticks(depth_indices)
-    ax[0].set_yticklabels(depth_values[depth_indices], fontsize=12)  
-    ax[0].set_xlabel('Crossline', fontsize=18)  
-    ax[0].set_ylabel('Depth', fontsize=18)  
+    ax[0].set_yticklabels(depth_values[depth_indices], fontsize=12)  # Adjust y-tick label size
+    ax[0].set_xlabel('Crossline', fontsize=18)  # Adjust x-label size
+    ax[0].set_ylabel('Depth', fontsize=18)  # Adjust y-label size
     fig.colorbar(im1, ax=ax[0], shrink=1)
 
-    im2 = ax[1].imshow(y_pred_unscaled_noisy.T, vmin=0, vmax=0.3, cmap='jet')
+    im2 = ax[1].imshow(y_pred_unscaled_noisy[inline,:,:].T, vmin=0, vmax=0.3, cmap='jet')
     ax[1].set_title('Estimated Porosity', fontsize=30)
     ax[1].set_aspect('auto')
     ax[1].set_yticks(depth_indices)
@@ -149,7 +146,7 @@ for idx, noise_level in enumerate(noise_levels):
     ax[1].set_xlabel('Crossline', fontsize=18)
     fig.colorbar(im2, ax=ax[1], shrink=1)
 
-    im3 = ax[2].imshow(porosity_test.T, vmin=0, vmax=0.3, cmap='jet')
+    im3 = ax[2].imshow(phi_full[inline,:,:].T, vmin=0, vmax=0.3, cmap='jet')
     ax[2].set_title('Ground Truth Porosity', fontsize=30)
     ax[2].set_aspect('auto')
     ax[2].set_yticks(depth_indices)
@@ -157,7 +154,7 @@ for idx, noise_level in enumerate(noise_levels):
     ax[2].set_xlabel('Crossline', fontsize=18)
     fig.colorbar(im3, ax=ax[2], shrink=1)
 
-    im4 = ax[3].imshow(phi_difference_noisy.T, cmap='jet')
+    im4 = ax[3].imshow(phi_difference_noisy[inline,:,:].T, cmap='jet')
     ax[3].set_title('Difference', fontsize=30)
     ax[3].set_aspect('auto')
     ax[3].set_yticks(depth_indices)
@@ -168,24 +165,8 @@ for idx, noise_level in enumerate(noise_levels):
     fig.tight_layout()
     fig.savefig(f"./plots/{noise_level}_noise_test.png", format="png", bbox_inches="tight")
 
-
-
-
-latex_table = "\\begin{table}[h!]\n\\centering\n\\begin{tabular}{ccccc}\n\\hline\n"
-latex_table += "Noise Level & SNR (dB) & SSIM & R² & Absolute Difference \\\\\n\\hline\n"
-for i in range(len(noise_levels)):
-    latex_table += (
-        f"{results['Noise Level'][i]} & {results['SNR'][i]:.2f} & "
-        f"{results['SSIM'][i]:.4f} & {results['R2'][i]:.4f} & "
-        f"{results['Absolute Difference'][i]:.4f} \\\\\n"
-    )
-latex_table += "\\hline\n\\end{tabular}\n\\caption{Noise Test Results}\n\\label{tab:noise_test}\n\\end{table}"
-
-
-# Save LaTeX table to a file
-with open("noise_test_results.tex", "w") as file:
-    file.write(latex_table)
-
-print("LaTeX table saved to 'noise_test_results.tex'")
-
-
+print(results)
+results_dataframe = pd.DataFrame(results)
+print(results_dataframe)
+latex_table = results_dataframe.to_latex(index=False, float_format="%.3f")
+print(latex_table)

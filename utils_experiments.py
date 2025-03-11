@@ -8,27 +8,6 @@ from tensorflow.keras.models import Model
 from tensorflow.keras import backend as K
 
 
-def robust_scaling(data):
-    median = np.median(data)
-    q1 = np.percentile(data, 25)
-    q3 = np.percentile(data, 75)
-    iqr = q3 - q1
-    return (data - median) / iqr
-  
-def unnormalize_robust(data_normalized, median_val, iqr_val):
-    """
-    Reverts the robust scaling normalization.
-
-    Parameters:
-    data_normalized (numpy array): The normalized data.
-    median_val (float): The original median value before normalization.
-    iqr_val (float): The original IQR (Interquartile Range) before normalization.
-
-    Returns:
-    numpy array: The unnormalized data.
-    """
-    return data_normalized * iqr_val + median_val
-
 def scale_to_range(data, min_val=-1, max_val=1):
     """
     Scale data to a range (default [-1, 1]) using min-max normalization.
@@ -78,267 +57,167 @@ def unscale_from_range(scaled_data, original_min, original_max, min_val=-1, max_
     
     return original
 
-def visualizacion_resultados(history):
+class R2Nicolas(tf.keras.metrics.Metric):
+    def __init__(self, name='r2_score', **kwargs):
+        # Initialize the parent class
+        super(R2Nicolas, self).__init__(name=name, **kwargs)
+        
+        # Create variables to accumulate values during training
+        self.ss_res = self.add_weight(name='ss_res', initializer='zeros')
+        self.ss_tot = self.add_weight(name='ss_tot', initializer='zeros')
 
-    train_acc = history.history['r2_score']
-    train_loss = history.history['loss']
-    train_lr = history.history['learning_rate']
-    val_acc = history.history['val_r2_score']
-    val_loss = history.history['val_loss']
-    
-    epochs = [i for i in range(len(train_acc))]
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Flatten the predictions and true values
+        y_pred = tf.reshape(y_pred, [-1])
+        y_true = tf.reshape(y_true, [-1])
+        
+        # Calculate mean of true values
+        y_mean = tf.reduce_mean(y_true)
+        
+        # Calculate sum of squared residuals
+        residuals = tf.square(y_true - y_pred)
+        self.ss_res.assign_add(tf.reduce_sum(residuals))
+        
+        # Calculate total sum of squares
+        total = tf.square(y_true - y_mean)
+        self.ss_tot.assign_add(tf.reduce_sum(total))
 
-    fig, ax = plt.subplots(1,3)
-    fig.set_size_inches(16,7)
+    def result(self):
+        # Calculate and return R² score
+        return 1 - self.ss_res / (self.ss_tot + K.epsilon())
 
-    ax[0].plot(epochs, train_acc, 'go-', label='accuracy-train')
-    ax[0].plot(epochs, val_acc, 'ro-', label='accuracy-val')
-    ax[0].set_title('Accuracy train')
-    ax[0].legend()
-    ax[0].set_xlabel('epochs')
-    ax[0].set_ylabel('accuracy')
-    ax[0].set_ylim(-1,1)
+    def reset_state(self):
+        # Reset accumulated values
+        self.ss_res.assign(0.0)
+        self.ss_tot.assign(0.0)
 
-    ax[1].plot(epochs, train_loss, 'go-', label='loss-train')
-    ax[1].plot(epochs, val_loss, 'ro-', label='loss-val')
-    ax[1].set_title('Loss train')
-    ax[1].legend()
-    ax[1].set_xlabel('epochs')
-    ax[1].set_ylabel('loss')
-    
-    ax[2].plot(epochs, train_lr, 'go-', label='lr-train')
-    ax[2].set_title('Learning Rate train')
-    ax[2].legend()
-    ax[2].set_xlabel('epochs')
-    ax[2].set_ylabel('Learning Rate')
-    
-    fig.savefig('./training.png')
+class CustomSeismicLoss(tf.keras.losses.Loss):
+    def __init__(self,
+                 model,
+                 well_seismic_data,
+                 well_porosity_data,
+                 lambda_param=0.5,
+                 name='custom_seismic_loss'):
+        super().__init__(name=name)
+        self.model = model
+        self.lambda_param = lambda_param
+        self.well_seismic_data = tf.convert_to_tensor(well_seismic_data, dtype=tf.float32)
+        self.well_porosity_data = tf.convert_to_tensor(well_porosity_data, dtype=tf.float32)
 
-    plt.show()
+        # Loss checkpoint
+        self.last_first_term = tf.Variable(0.0)
+        self.last_second_term = tf.Variable(0.0)
 
-def plot_nfe_experiment(coords_train, coords_val,seis_mature_normalized, porcentaje_entrenamiento, porcentaje_validacion):
-    offset = np.array([13, 1300])
+    def calculate_mse(self, y_true, y_pred):
+        mse = tf.reduce_mean(tf.square(y_pred - y_true))
+        self.last_first_term.assign(mse)
+        return mse
 
-    coords_train = coords_train + offset
-    coords_val = coords_val + offset
-    
-    # Extract x and y coordinates
-    x_val = coords_val[:, 0]
-    y_val = coords_val[:, 1]
+    def calculate_well_term(self):
+        if self.lambda_param == 0:
+            self.last_second_term.assign(0.0)
+            return 0.0
 
-    x_train = coords_train[:, 0]
-    y_train = coords_train[:, 1]
+        y_pred_well = self.model(self.well_seismic_data, training=True)
+        well_term = (self.lambda_param / 2) * tf.reduce_mean(tf.square(y_pred_well - self.well_porosity_data))
+        self.last_second_term.assign(well_term)
+        return well_term
 
-    # Define the rectangle parameters
-    rect_x_seismic = 13
-    rect_y_seismic = 930
-    rect_width_seismic = 195 - rect_x_seismic
-    rect_height_seismic = 2140 - rect_y_seismic
+    def call(self, y_true, y_pred):
+        return self.calculate_mse(y_true, y_pred) + self.calculate_well_term()
 
-    rect_x_mature_block = 13
-    rect_y_mature_block = 1300
-    rect_width_mature_block = 195 - rect_x_mature_block
-    rect_height_mature_block = 2140 - rect_y_mature_block
+class LossComponentCallback(tf.keras.callbacks.Callback):
+    def __init__(self, custom_loss):
+        super().__init__()
+        self.custom_loss = custom_loss
+        # Initialize lists to store loss components
+        self.first_terms = []
+        self.second_terms = []
+        self.total_losses = []
+        self.val_total_losses = []
 
-    rect_x_expl_block = 13
-    rect_y_expl_block  = 930
-    rect_width_expl_block  = 195 - rect_x_expl_block
-    rect_height_expl_block  = 1300 - rect_y_expl_block
+    def on_epoch_end(self, epoch, logs={}):
+        first_term = float(tf.keras.backend.get_value(self.custom_loss.last_first_term))
 
-    # Create a scatter plot
-    fig, ax = plt.subplots()
+        # Only get second term if lambda is not 0
+        if self.custom_loss.lambda_param > 0:
+            second_term = float(tf.keras.backend.get_value(self.custom_loss.last_second_term))
+        else:
+            second_term = 0.0
 
-    ax.scatter(x_train, y_train, s=0.25, label='Train Traces')
-    ax.scatter(x_val, y_val, s=0.25, label='Validation Traces')
+        total_loss = logs.get('loss', 0)
+        val_loss = logs.get('val_loss', 0)
 
+        # Store the values
+        self.first_terms.append(first_term)
+        self.second_terms.append(second_term)
+        self.total_losses.append(total_loss)
+        self.val_total_losses.append(val_loss)
 
-    rect_seismic = patches.Rectangle((rect_x_seismic-2, rect_y_seismic-4), rect_width_seismic+4, rect_height_seismic+8, linewidth=2, edgecolor='r', facecolor='none', label='Seismic')
-    rect_mature = patches.Rectangle((rect_x_mature_block, rect_y_mature_block), rect_width_mature_block, rect_height_mature_block, linewidth=1, edgecolor='b', facecolor='none', label='Mature Block')
-    rect_exploration = patches.Rectangle((rect_x_expl_block, rect_y_expl_block), rect_width_expl_block, rect_height_expl_block, linewidth=1, edgecolor='g', facecolor='none', label='Exploration Block')
-    ax.add_patch(rect_seismic)
-    ax.add_patch(rect_mature)
-    ax.add_patch(rect_exploration)
+        # Print progress every 10 epochs
+        if (epoch + 1) % 10 == 0:
+            print(f"\nEpoch {epoch + 1} Loss Components:")
+            print(f"First Term (MSE): {first_term:.6f}")
+            print(f"Second Term (Well Constraint): {second_term:.6f}")
+            print(f"Total Loss: {total_loss:.6f}")
+            print(f"Validation Loss: {val_loss:.6f}")
 
-    # Add explanatory text below the legend
-    # Add explanatory text below the legend with specified width
-    wrapped_text = "\n".join([f"Total # of traces: {(seis_mature_normalized.shape[0] * seis_mature_normalized.shape[1])} \nExperiment with {porcentaje_entrenamiento}% of traces for training and {porcentaje_validacion}% for validaton "])
+    def plot_losses(self):
+        import matplotlib.pyplot as plt
 
-    # Adjust layout to make room for the text
-    plt.subplots_adjust(right=0.75)
-    # Add the wrapped explanatory text to the plot
-    fig.text(0.9, 0.4, wrapped_text, ha='center', wrap=True, fontsize=11, color='black')
+        plt.figure(figsize=(12, 8))
+        epochs = range(1, len(self.first_terms) + 1)
 
-    # Adjust layout to make room for the text
-    plt.subplots_adjust(bottom=0.2)
+        # Plot all components
+        plt.plot(epochs, self.first_terms, 'b-', label='First Term (MSE)')
+        plt.plot(epochs, self.second_terms, 'g-', label='Second Term (Well Constraint)')
+        plt.plot(epochs, self.total_losses, 'r-', label='Total Training Loss')
+        plt.plot(epochs, self.val_total_losses, 'r--', label='Total Validation Loss')
 
-    # Add labels and title for better understanding
-    plt.xlabel('Inline')
-    plt.ylabel('Crossline')
-    plt.title('Train and Validation Traces')
-    plt.legend(bbox_to_anchor=(1, 1.05) )
+        plt.title('Loss Components Over Time')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
 
-    # Show the plot
-    plt.show()
-    
-def conv_block(inputs, filters, kernel_size, num_convs=3, activation='leaky_relu'):
-    """Create a block of convolutions followed by BatchNorm and activation."""
-    x = inputs
-    for _ in range(num_convs):
-        x = Conv2D(filters=filters, kernel_size=kernel_size, padding='same')(x)
-        x = Activation(activation)(x)
-        x = BatchNormalization()(x)
-    return x
+        # Add log scale option if the losses vary by orders of magnitude
+        plt.yscale('log')
 
-def downsample_block(inputs):
-    """Create a downsampling block with Conv2D and strides."""
-    x = MaxPooling2D((2,1))(inputs)
-    return x
-
-def upsample_block(inputs, filters, kernel_size, strides=(2,1)):
-    """Create an upsampling block with Conv2DTranspose."""
-    x = Conv2DTranspose(filters=filters, kernel_size=kernel_size, strides=strides, padding='same')(inputs)
-    x = Activation('leaky_relu')(x)
-    x = BatchNormalization()(x)
-    return x
-
-def unet_model(filtros, given_seed):
-    """Build the U-Net model."""
-    inputs = Input(shape=(124, 1, 1))
-
-    # First Block
-    conv1 = conv_block(inputs, filters=filtros, kernel_size=(5, 1))
-    downsampl1 = downsample_block(conv1)
-
-    # Second Block
-    conv2 = conv_block(downsampl1, filters=filtros*2, kernel_size=(5, 1))
-    downsampl2 = downsample_block(conv2)
-
-    # Third Block
-    conv3 = conv_block(downsampl2, filters=filtros*4, kernel_size=(5, 1))
-
-    # First Upsampling
-    upsample1 = upsample_block(conv3, filters=filtros*2, kernel_size=(5, 1))
-
-    # Fourth Block
-    conv4 = conv_block(upsample1, filters=filtros*2, kernel_size=(5, 1))
-    skip = Concatenate()([conv2, conv4])
-    
-    # Second Upsampling
-    upsample2 = upsample_block(skip, filters=filtros, kernel_size=(5, 1))
-
-    # Fifth Block
-    conv5 = conv_block(upsample2, filters=filtros, kernel_size=(5, 1))
-
-    # Skip connection
-    skip = Concatenate()([conv1, conv5])
-    
-    #Capa de salida
-    outputs = conv_block(skip, filters=1, kernel_size=(5, 1), num_convs=1, activation='tanh')
-
-    #Formateo para ajustar a datos
-    outputs = Lambda(lambda x: tf.squeeze(x, axis=[-1, -2]))(outputs)
-
-    model = Model(inputs, outputs)
-    return model
-
-def modify_pretrained_model(pretrained_model, filtros, given_seed):
-    """    
-    Arguments:
-    - pretrained_model: The pre-trained model to be modified.
-    - filters: Number of filters for the custom layers.
-    - seed: Seed for weight initialization of custom layers.
-    
-    Returns:
-    - model: The modified model ready for training.
-    """
-    # Remove the last two layers (conv10 and Lambda layer)
-    model_output = pretrained_model.layers[-3].output  # Output from the layer before `conv10`
-
-    # Add your custom layers
-    new_layers = conv_block(model_output, filters=filtros*2, kernel_size=(5, 1))
-    new_layers2 = conv_block(new_layers, filters=1, kernel_size=(5, 1), num_convs=1)
-    # Add a new Lambda layer for predictions
-    new_output = Lambda(lambda x: tf.squeeze(x, axis=[-1, -2]))(new_layers2)
-
-    # Create the new model
-    model = Model(inputs=pretrained_model.input, outputs=new_output)
-
-   # Count the number of newly added layers (conv_block layers and Lambda)
-    num_new_layers = 0
-    for layer in model.layers:
-        if layer not in pretrained_model.layers:
-            num_new_layers += 1
-
-    # Freeze all the layers except the newly added ones
-    for layer in model.layers[:-num_new_layers]:  # Freeze all except the new layers
-        layer.trainable = False
-
-    
-    return model
-    
+        plt.tight_layout()
+        plt.show()
+        
 def simplified_cnn(input_shape):
+
     inputs = tf.keras.Input(shape=input_shape)
 
-    # Encoder
     # Bloque 1
-    x1 = tf.keras.layers.Conv2D(6, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(inputs)
-    x1 = tf.keras.layers.LeakyReLU()(x1)
-    x1 = tf.keras.layers.BatchNormalization()(x1)
-    x1 = tf.keras.layers.Conv2D(6, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x1)
-    x1 = tf.keras.layers.LeakyReLU()(x1)
-    x1 = tf.keras.layers.BatchNormalization()(x1)
-    x1 = tf.keras.layers.Conv2D(6, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x1)
-    x1 = tf.keras.layers.LeakyReLU()(x1)
-    x1 = tf.keras.layers.BatchNormalization()(x1)
-    
-    # Bloque 2
-    x2 = tf.keras.layers.Conv2D(12, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x1)
-    x2 = tf.keras.layers.LeakyReLU()(x2)
-    x2 = tf.keras.layers.BatchNormalization()(x2)
-    x2 = tf.keras.layers.Conv2D(12, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x2)
-    x2 = tf.keras.layers.LeakyReLU()(x2)
-    x2 = tf.keras.layers.BatchNormalization()(x2)
-    x2 = tf.keras.layers.Conv2D(12, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x2)
-    x2 = tf.keras.layers.LeakyReLU()(x2)
-    x2 = tf.keras.layers.BatchNormalization()(x2)
-    
-    # Output shape: (124, 1, 12)
-    drop = tf.keras.layers.Dropout(0.5)(x2)  # 50% of neurons are randomly dropped during training
-    
-    # flat_bottle_neck = tf.keras.layers.Flatten()(drop)
-    # dense_bottle_neck = tf.keras.layers.Dense(1488, activation='leaky_relu')(flat_bottle_neck)
-    # reshape_bottleneck = tf.keras.layers.Reshape((124, 1, 12))(dense_bottle_neck)
-    
-    # Bloque 3
-    x3 = tf.keras.layers.Conv2D(24, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(drop)
-    x3 = tf.keras.layers.LeakyReLU()(x3)
-    x3 = tf.keras.layers.BatchNormalization()(x3)
-    x3 = tf.keras.layers.Conv2D(24, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x3)
-    x3 = tf.keras.layers.LeakyReLU()(x3)
-    x3 = tf.keras.layers.BatchNormalization()(x3)
-    x3 = tf.keras.layers.Conv2D(24, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x3)
-    x3 = tf.keras.layers.LeakyReLU()(x3)
-    x3 = tf.keras.layers.BatchNormalization()(x3)
-    
-        # Bloque 1
-    x4 = tf.keras.layers.Conv2D(30, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x3)
-    x4 = tf.keras.layers.LeakyReLU()(x4)
-    x4 = tf.keras.layers.BatchNormalization()(x4)
-    x4 = tf.keras.layers.Conv2D(30, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x4)
-    x4 = tf.keras.layers.LeakyReLU()(x4)
-    x4 = tf.keras.layers.BatchNormalization()(x4)
-    x4 = tf.keras.layers.Conv2D(30, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x4)
-    x4 = tf.keras.layers.LeakyReLU()(x4)
-    x4 = tf.keras.layers.BatchNormalization()(x4)
-    x4 = tf.keras.layers.Conv2D(1, (5, 1), strides=1, padding='same', kernel_regularizer=tf.keras.regularizers.l1(0.01))(x4)
-    x4 = tf.keras.layers.LeakyReLU()(x4)
-    outputs = tf.keras.layers.BatchNormalization()(x4)
+    x1 = tf.keras.layers.Conv2D(8, (15, 1), strides=1, padding='same')(inputs)
+    x1 = tf.keras.layers.Activation('leaky_relu')(x1)
 
+    # Bloque 2
+    x2 = tf.keras.layers.Conv2D(16, (15, 1), strides=1, padding='same')(x1)
+    x2 = tf.keras.layers.Activation('leaky_relu')(x2)
     
+    conv_bottleneck = tf.keras.layers.Conv2D(4, (15, 1), strides=1, padding='same')(x2)
+    conv_bottleneck = tf.keras.layers.Activation('leaky_relu')(conv_bottleneck)
+    
+    drop2 = tf.keras.layers.Dropout(0.1)(conv_bottleneck)
+    
+    flat_bottle_neck = tf.keras.layers.Flatten()(drop2)
+    dense_bottle_neck = tf.keras.layers.Dense(input_shape[0]*4, activation='leaky_relu')(flat_bottle_neck)
+    reshape_bottleneck = tf.keras.layers.Reshape((input_shape[0], 1, 4))(dense_bottle_neck)
+
+    # Bloque 3
+    x3 = tf.keras.layers.Conv2D(32, (15, 1), strides=1, padding='same')(reshape_bottleneck)
+    x3 = tf.keras.layers.Activation('leaky_relu')(x3)
+
+    # Bloque 4
+    x4 = tf.keras.layers.Conv2D(64, (15, 1), strides=1, padding='same')(x3)
+    x4 = tf.keras.layers.Activation('leaky_relu')(x4)
+    
+    
+    x5 = tf.keras.layers.Conv2D(1, (15, 1), strides=1, padding='same')(x4)
+    outputs = tf.keras.layers.Activation('leaky_relu')(x5)
+
     model = tf.keras.Model(inputs, outputs)
     return model
-
-def r2_score(y_true, y_pred):
-    ss_res = K.sum(K.square(y_true - y_pred))  # Residual sum of squares
-    ss_tot = K.sum(K.square(y_true - K.mean(y_true)))  # Total sum of squares
-    return 1 - ss_res / (ss_tot + K.epsilon())  # Para evitar divisiones por cero
