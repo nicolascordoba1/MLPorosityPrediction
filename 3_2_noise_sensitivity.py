@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from skimage.metrics import structural_similarity as ssim
 from sklearn.metrics import r2_score
-from utils_experiments import scale_to_range, unscale_from_range
+from utils_experiments import scale_to_range, unscale_from_range, simplified_cnn
 
 depth_start = 4700
 depth_end = 6410
@@ -37,44 +37,6 @@ phi_full[phi_full < 0] = 0
 max_amplitud = abs(seis_full).max()
 noise_levels = noise_prcentage * max_amplitud
 # Model setup
-def simplified_cnn(input_shape):
-
-    inputs = tf.keras.Input(shape=input_shape)
-
-    # Encoder
-    # Bloque 1
-    x1 = tf.keras.layers.Conv2D(8, (15, 1), strides=1, padding='same')(inputs)
-    x1 = tf.keras.layers.Activation('leaky_relu')(x1)
-
-    # Bloque 2
-    x2 = tf.keras.layers.Conv2D(16, (15, 1), strides=1, padding='same')(x1)
-    x2 = tf.keras.layers.Activation('leaky_relu')(x2)
-    
-    conv_bottleneck = tf.keras.layers.Conv2D(4, (15, 1), strides=1, padding='same')(x2)
-    conv_bottleneck = tf.keras.layers.Activation('leaky_relu')(conv_bottleneck)
-    
-    drop2 = tf.keras.layers.Dropout(0.1)(conv_bottleneck)
-    
-    flat_bottle_neck = tf.keras.layers.Flatten()(drop2)
-    dense_bottle_neck = tf.keras.layers.Dense(input_shape[0]*4, activation='leaky_relu')(flat_bottle_neck)
-    reshape_bottleneck = tf.keras.layers.Reshape((input_shape[0], 1, 4))(dense_bottle_neck)
-
-    # Bloque 3
-    x3 = tf.keras.layers.Conv2D(32, (15, 1), strides=1, padding='same')(reshape_bottleneck)
-    x3 = tf.keras.layers.Activation('leaky_relu')(x3)
-
-    # Bloque 4
-    x4 = tf.keras.layers.Conv2D(64, (15, 1), strides=1, padding='same')(x3)
-    x4 = tf.keras.layers.Activation('leaky_relu')(x4)
-    
-    
-    x5 = tf.keras.layers.Conv2D(1, (15, 1), strides=1, padding='same')(x4)
-    outputs = tf.keras.layers.Activation('leaky_relu')(x5)
-
-    model = tf.keras.Model(inputs, outputs)
-    return model
-
-# Definir las dimensiones de entrada
 input_shape = (86, 1, 1)
 model = simplified_cnn(input_shape)
 print(model.summary())
