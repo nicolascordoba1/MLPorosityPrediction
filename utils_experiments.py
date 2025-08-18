@@ -217,7 +217,7 @@ def simplified_cnn(input_shape):
     
     
     x5 = tf.keras.layers.Conv2D(1, (15, 1), strides=1, padding='same')(x4)
-    outputs = tf.keras.layers.Activation('leaky_relu')(x5)
+    outputs = tf.keras.layers.Activation('tanh')(x5)
 
     model = tf.keras.Model(inputs, outputs)
     return model

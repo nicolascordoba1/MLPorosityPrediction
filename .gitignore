@@ -1,0 +1,7 @@
+.2025_maestria/
+plots/
+*.mp4
+*.png
+*.gif
+*.csv
+__pycache__/
